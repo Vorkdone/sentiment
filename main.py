@@ -20,11 +20,6 @@ from requests.auth import HTTPBasicAuth
 import logging
 import warnings
 
-# Load environment variables
-load_dotenv()
-TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
-TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
-
 # Filter out specific warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', message='.*torch.utils._pytree.*')
@@ -32,8 +27,8 @@ warnings.filterwarnings('ignore', message='.*resume_download.*')
 
 # Configure logging to be less verbose
 logging.basicConfig(
-    level=logging.WARNING,  # Changed from INFO to WARNING
-    format='%(message)s',  # Simplified format
+    level=logging.WARNING,
+    format='%(message)s',
     handlers=[
         logging.FileHandler('app.log'),
         logging.StreamHandler()
@@ -53,9 +48,17 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs('static', exist_ok=True)
 
+# Load environment variables
+load_dotenv()
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+
 # Initialize sentiment analysis pipeline
-print("Initializing sentiment analysis model...")  # Changed from logger.info to print
-pipe = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english", framework="pt", padding=True, truncation=True)
+print("Initializing sentiment analysis model...")
+pipe = pipeline("text-classification", 
+                model="distilbert-base-uncased-finetuned-sst-2-english", 
+                framework="pt",
+                device="cpu")  # Explicitly use CPU
 
 # Welcome messages and help information
 WELCOME_MESSAGE = """👋 Welcome to the Sentiment Analysis Bot!
@@ -451,8 +454,15 @@ def analyze():
         return Response(twiml, mimetype="application/xml")
 
 if __name__ == '__main__':
+    # Get port from environment variable (Render sets this)
+    port = int(os.environ.get("PORT", 5000))
+    
     print("\n=== Sentiment Analysis Service ===")
-    print("Starting Flask application...")
-    print("Access the application at http://localhost:5000")
+    print(f"Starting Flask application on port {port}...")
+    print(f"Access the application at http://0.0.0.0:{port}")
     print("Press Ctrl+C to quit\n")
-    app.run(debug=False, host='localhost', port=5000)  # Changed debug to False to reduce logs
+    
+    # Run the app on 0.0.0.0 to make it accessible externally
+    app.run(host='0.0.0.0', 
+            port=port,
+            debug=False)  # Set debug=False for production
