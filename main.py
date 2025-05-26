@@ -8,7 +8,7 @@ import matplotlib
 matplotlib.use('Agg')  # Set the backend before importing pyplot
 
 from flask import Flask, request, Response
-from transformers import pipeline
+from transformers import pipeline, AutoConfig
 import pandas as pd
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
@@ -20,6 +20,7 @@ from requests.auth import HTTPBasicAuth
 import logging
 import warnings
 import sys
+import gc
 
 # Filter out specific warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -54,12 +55,23 @@ load_dotenv()
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
 
-# Initialize sentiment analysis pipeline
-print("Initializing sentiment analysis model...")
-pipe = pipeline("text-classification", 
-                model="distilbert-base-uncased-finetuned-sst-2-english", 
-                framework="pt",
-                device="cpu")  # Explicitly use CPU
+# Initialize sentiment analysis pipeline lazily
+pipe = None
+
+def get_sentiment_pipeline():
+    global pipe
+    if pipe is None:
+        print("Initializing sentiment analysis model...")
+        # Use smaller model configuration
+        config = AutoConfig.from_pretrained("distilbert-base-uncased-finetuned-sst-2-english")
+        config.torchscript = True  # Enable TorchScript for better memory usage
+        
+        pipe = pipeline("text-classification", 
+                       model="distilbert-base-uncased-finetuned-sst-2-english",
+                       config=config,
+                       framework="pt",
+                       device="cpu")  # Explicitly use CPU
+    return pipe
 
 # Welcome messages and help information
 WELCOME_MESSAGE = """👋 Welcome to the Sentiment Analysis Bot!
@@ -154,9 +166,12 @@ def analyze_text(text: str) -> str:
             logger.warning(f"Text truncated from {len(text)} to 512 characters")
             text = text[:512]
             
-        # Analyze sentiment
-        result = pipe(text)
-        logger.info(f"Analyzed text: {text[:50]}... -> Result: {result}")
+        # Get pipeline and analyze sentiment
+        sentiment_pipe = get_sentiment_pipeline()
+        result = sentiment_pipe(text)
+        
+        # Force garbage collection after analysis
+        gc.collect()
         
         if result and isinstance(result, list) and 'label' in result[0]:
             label = result[0]["label"].upper()
