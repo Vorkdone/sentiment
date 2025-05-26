@@ -19,6 +19,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 import logging
 import warnings
+import sys
 
 # Filter out specific warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -452,6 +453,15 @@ def analyze():
     <Message>Please send a message or upload a file to analyze sentiments. Type 'help' for instructions.</Message>
 </Response>"""
         return Response(twiml, mimetype="application/xml")
+
+@app.route('/version')
+def version():
+    """Endpoint to check Python version and environment details"""
+    return {
+        'python_version': sys.version,
+        'platform': sys.platform,
+        'environment': os.environ.get('RENDER_ENVIRONMENT', 'local')
+    }
 
 if __name__ == '__main__':
     # Get port from environment variable (Render sets this)
