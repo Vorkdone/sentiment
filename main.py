@@ -7,8 +7,9 @@ It supports both single text analysis and bulk processing of files.
 import matplotlib
 matplotlib.use('Agg')  # Set the backend before importing pyplot
 
-from flask import Flask, request, Response
+from flask import Flask, request, Response, make_response
 from transformers import pipeline, AutoConfig
+from twilio.twiml.messaging_response import MessagingResponse
 import pandas as pd
 import matplotlib.pyplot as plt
 from dotenv import load_dotenv
@@ -319,155 +320,120 @@ def create_visualization(stats):
 @app.route('/', methods=['GET'])
 def welcome():
     """Welcome endpoint that returns a greeting message"""
-    twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>{WELCOME_MESSAGE}</Message>
-</Response>"""
-    return Response(twiml, mimetype="application/xml")
+    resp = MessagingResponse()
+    resp.message(WELCOME_MESSAGE)
+    return str(resp)
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
     """Analyze endpoint for processing text and files"""
-    incoming_msg = request.form.get('Body', '').strip().lower()
-    media_url = request.form.get('MediaUrl0', None)
-
-    # Handle special keywords
-    if incoming_msg in ['hi', 'hello']:
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>{WELCOME_MESSAGE}</Message>
-</Response>"""
-        return Response(twiml, mimetype="application/xml")
-    
-    elif incoming_msg == 'help':
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>{HELP_MESSAGE}</Message>
-</Response>"""
-        return Response(twiml, mimetype="application/xml")
-    
-    elif incoming_msg == 'start':
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>{START_MESSAGE}</Message>
-</Response>"""
-        return Response(twiml, mimetype="application/xml")
-
-    # Handle file uploaded via Postman form-data
-    if 'review' in request.files:
-        uploaded_file = request.files['review']
-        if uploaded_file and allowed_file(uploaded_file.filename):
-            timestamp = str(int(time.time()))
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{timestamp}_{uploaded_file.filename}")
-            uploaded_file.save(file_path)
-            logger.info(f"Saved file to: {file_path}")
-
-            results_df, stats = process_file(file_path)
-
-            if results_df is not None and stats is not None:
-                viz_path = create_visualization(stats)
-                summary = (f"📊 Sentiment Analysis Results 📊\n\n"
-                           f"Total reviews analyzed: {stats['total']}\n"
-                           f"✅ Positive: {stats['positive']} ({stats['positive'] / stats['total'] * 100:.1f}%)\n"
-                           f"❌ Negative: {stats['negative']} ({stats['negative'] / stats['total'] * 100:.1f}%)\n"
-                           f"➖ Neutral: {stats['neutral']} ({stats['neutral'] / stats['total'] * 100:.1f}%)\n\n")
-                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>{summary}</Message>
-</Response>"""
-                return Response(twiml, mimetype="application/xml")
-            else:
-                twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>Could not process the file. Please ensure it contains a column with reviews and is in Excel, CSV or TXT format.</Message>
-</Response>"""
-                return Response(twiml, mimetype="application/xml")
-
-    # Handle Twilio file (MediaUrl0)
-    if media_url:
-        try:
-            logger.info(f"Processing media URL: {media_url}")
-            response = requests.get(
-                media_url,
-                timeout=10,
-                auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-            )
-            response.raise_for_status()
-            timestamp = pd.Timestamp.now().strftime('%Y%m%d%H%M%S')
-            filename = f"twilio_file_{timestamp}"
-
-            content_type = response.headers.get('Content-Type', '').lower()
-            if 'excel' in content_type or 'spreadsheet' in content_type:
-                file_ext = '.xlsx'
-            elif 'csv' in content_type:
-                file_ext = '.csv'
-            elif 'text/plain' in content_type:
-                file_ext = '.txt'
-            else:
-                file_ext = '.csv'  # Default to CSV for WhatsApp uploads
-
-            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename + file_ext)
-            logger.info(f"Saving to: {file_path}")
-
-            with open(file_path, 'wb') as f:
-                f.write(response.content)
-
-            results_df, stats = process_file(file_path)
-
-            if results_df is not None and stats is not None:
-                viz_path = create_visualization(stats)
-                summary = (f"📊 Sentiment Analysis Results 📊\n\n"
-                           f"Total reviews analyzed: {stats['total']}\n"
-                           f"✅ Positive: {stats['positive']} ({stats['positive'] / stats['total'] * 100:.1f}%)\n"
-                           f"❌ Negative: {stats['negative']} ({stats['negative'] / stats['total'] * 100:.1f}%)\n"
-                           f"➖ Neutral: {stats['neutral']} ({stats['neutral'] / stats['total'] * 100:.1f}%)\n\n")
-                image_url = request.host_url.rstrip('/') + '/' + viz_path.replace("\\", "/")
-                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>
-        {summary}
-        <Media>{image_url}</Media>
-    </Message>
-</Response>"""
-                return Response(twiml, mimetype="application/xml")
-            else:
-                twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>Could not process the file. Please ensure it contains a column with reviews and is in Excel, CSV or TXT format.</Message>
-</Response>"""
-                return Response(twiml, mimetype="application/xml")
-        except Exception as e:
-            logger.error(f"Error processing media URL: {str(e)}")
-            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>Error processing file: {str(e)}</Message>
-</Response>"""
-            return Response(twiml, mimetype="application/xml")
-
-    # Handle regular text input
-    elif incoming_msg:
-        if len(incoming_msg.strip()) == 0:
-            twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>Please send some text to analyze or type 'help' for instructions.</Message>
-</Response>"""
-            return Response(twiml, mimetype="application/xml")
+    try:
+        # Initialize Twilio response
+        resp = MessagingResponse()
         
-        result = analyze_text(incoming_msg)
-        emoji = "✅" if result == "POSITIVE" else "❌" if result == "NEGATIVE" else "➖"
-        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>Sentiment: {emoji} {result}</Message>
-</Response>"""
-        return Response(twiml, mimetype="application/xml")
+        # Get incoming message
+        incoming_msg = request.form.get('Body', '').strip()
+        media_url = request.form.get('MediaUrl0', None)
+        
+        # Log incoming request details
+        logger.info(f"Received request - Message: {incoming_msg[:50]}... Media: {'Yes' if media_url else 'No'}")
 
-    # Nothing provided
-    else:
-        twiml = """<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-    <Message>Please send a message or upload a file to analyze sentiments. Type 'help' for instructions.</Message>
-</Response>"""
-        return Response(twiml, mimetype="application/xml")
+        # Handle special keywords
+        if incoming_msg.lower() in ['hi', 'hello']:
+            resp.message(WELCOME_MESSAGE)
+            return str(resp)
+        
+        elif incoming_msg.lower() == 'help':
+            resp.message(HELP_MESSAGE)
+            return str(resp)
+        
+        elif incoming_msg.lower() == 'start':
+            resp.message(START_MESSAGE)
+            return str(resp)
+
+        # Handle file uploaded via Twilio
+        if media_url:
+            try:
+                logger.info(f"Processing media from URL: {media_url}")
+                response = requests.get(
+                    media_url,
+                    auth=HTTPBasicAuth(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+                )
+                response.raise_for_status()
+                
+                # Create unique filename
+                timestamp = pd.Timestamp.now().strftime('%Y%m%d%H%M%S')
+                filename = f"twilio_file_{timestamp}"
+                
+                # Determine file extension from content type
+                content_type = response.headers.get('Content-Type', '').lower()
+                if 'excel' in content_type or 'spreadsheet' in content_type:
+                    file_ext = '.xlsx'
+                elif 'csv' in content_type:
+                    file_ext = '.csv'
+                else:
+                    file_ext = '.txt'  # Default to text
+                
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename + file_ext)
+                
+                # Save file
+                with open(file_path, 'wb') as f:
+                    f.write(response.content)
+                
+                # Process file
+                results_df, stats = process_file(file_path)
+                
+                if results_df is not None and stats is not None:
+                    # Create visualization
+                    viz_path = create_visualization(stats)
+                    
+                    # Prepare response message
+                    summary = (f"📊 Sentiment Analysis Results 📊\n\n"
+                             f"Total reviews analyzed: {stats['total']}\n"
+                             f"✅ Positive: {stats['positive']} ({stats['positive']/stats['total']*100:.1f}%)\n"
+                             f"❌ Negative: {stats['negative']} ({stats['negative']/stats['total']*100:.1f}%)\n"
+                             f"➖ Neutral: {stats['neutral']} ({stats['neutral']/stats['total']*100:.1f}%)")
+                    
+                    # Send text response
+                    msg = resp.message(summary)
+                    
+                    # Attach visualization if created
+                    if viz_path:
+                        msg.media(request.host_url.rstrip('/') + '/' + viz_path.replace('\\', '/'))
+                    
+                    return str(resp)
+                else:
+                    resp.message("Could not process the file. Please ensure it contains a column with reviews and is in Excel, CSV or TXT format.")
+                    return str(resp)
+                
+            except Exception as e:
+                logger.error(f"Error processing media: {str(e)}")
+                resp.message(f"Sorry, I couldn't process your file: {str(e)}")
+                return str(resp)
+
+        # Handle text input
+        elif incoming_msg:
+            if len(incoming_msg.strip()) == 0:
+                resp.message("Please send some text to analyze or type 'help' for instructions.")
+                return str(resp)
+            
+            # Analyze sentiment
+            result = analyze_text(incoming_msg)
+            emoji = "✅" if result == "POSITIVE" else "❌" if result == "NEGATIVE" else "➖"
+            resp.message(f"Sentiment: {emoji} {result}")
+            return str(resp)
+
+        # Nothing provided
+        else:
+            resp.message("Please send a message or upload a file to analyze sentiments. Type 'help' for instructions.")
+            return str(resp)
+            
+    except Exception as e:
+        logger.error(f"Error in analyze endpoint: {str(e)}")
+        # Return error response in Twilio format
+        resp = MessagingResponse()
+        resp.message("Sorry, something went wrong. Please try again later.")
+        return str(resp)
 
 @app.route('/version')
 def version():
@@ -487,7 +453,7 @@ if __name__ == '__main__':
     print(f"Access the application at http://0.0.0.0:{port}")
     print("Press Ctrl+C to quit\n")
     
-    # Run the app on 0.0.0.0 to make it accessible externally
+    # Run the app
     app.run(host='0.0.0.0', 
             port=port,
             debug=False)  # Set debug=False for production
